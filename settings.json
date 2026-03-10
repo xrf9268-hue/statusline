@@ -7,6 +7,9 @@
   "env": {
     "STATUSLINE_COST_THRESHOLD": "0.50",
     "STATUSLINE_LOG_LEVEL": "WARNING",
-    "STATUSLINE_DEBUG": "0"
+    "STATUSLINE_DEBUG": "0",
+    "STATUSLINE_SHOW_TOKENS": "0",
+    "STATUSLINE_SHOW_BURNRATE": "0",
+    "STATUSLINE_LAYOUT": "vim,time,model,dir,cost,lines,api"
   }
 }
