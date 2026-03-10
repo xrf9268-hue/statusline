@@ -17,30 +17,34 @@ from typing import Optional, Dict, Any, Tuple, List
 import subprocess
 
 # ===================== Cross-platform File Locking =====================
+# Detect available locking mechanism once at module load
+_lock_impl = None  # 'fcntl', 'msvcrt', or None
+try:
+    import fcntl as _fcntl_mod
+    _lock_impl = 'fcntl'
+except ImportError:
+    try:
+        import msvcrt as _msvcrt_mod
+        _lock_impl = 'msvcrt'
+    except ImportError:
+        pass  # No locking available - degrade gracefully
+
+
 def _flock(f, exclusive=False):
     """Acquire file lock (cross-platform: fcntl -> msvcrt -> no-op)"""
-    try:
-        import fcntl
-        fcntl.flock(f.fileno(), fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
-    except ImportError:
-        try:
-            import msvcrt
-            msvcrt.locking(f.fileno(), msvcrt.LK_LOCK if exclusive else msvcrt.LK_NBLCK, 1)
-        except ImportError:
-            pass  # No locking available - degrade gracefully
+    if _lock_impl == 'fcntl':
+        _fcntl_mod.flock(f.fileno(), _fcntl_mod.LOCK_EX if exclusive else _fcntl_mod.LOCK_SH)
+    elif _lock_impl == 'msvcrt':
+        # msvcrt only supports exclusive locks; shared lock not available on Windows
+        _msvcrt_mod.locking(f.fileno(), _msvcrt_mod.LK_LOCK, 1)
 
 
 def _funlock(f):
     """Release file lock (cross-platform: fcntl -> msvcrt -> no-op)"""
-    try:
-        import fcntl
-        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-    except ImportError:
-        try:
-            import msvcrt
-            msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
-        except ImportError:
-            pass
+    if _lock_impl == 'fcntl':
+        _fcntl_mod.flock(f.fileno(), _fcntl_mod.LOCK_UN)
+    elif _lock_impl == 'msvcrt':
+        _msvcrt_mod.locking(f.fileno(), _msvcrt_mod.LK_UNLCK, 1)
 
 # ===================== Constants =====================
 # Time constants
@@ -75,7 +79,7 @@ VIM_MODE_MAP = {
 }
 
 # Default layout segments
-DEFAULT_LAYOUT = 'vim,time,model,dir,cost,context,lines,api'
+DEFAULT_LAYOUT = 'vim,time,model,dir,cost,lines,api'
 
 # ===================== Colors =====================
 class Colors:
@@ -178,6 +182,8 @@ class ClaudeContext:
     # Context window
     ctx_used_pct: Optional[float] = None
     ctx_remaining_pct: Optional[float] = None
+    ctx_window_size: Optional[int] = None
+    exceeds_200k: bool = False
     # Tokens
     input_tokens: int = 0
     output_tokens: int = 0
@@ -377,7 +383,7 @@ def format_tokens(count: int) -> str:
     if count >= 1_000_000:
         return f"{count / 1_000_000:.1f}M"
     elif count >= 1000:
-        return f"{count // 1000}K"
+        return f"{count / 1000:.1f}K"
     return str(count)
 
 
@@ -466,8 +472,8 @@ def parse_claude_context() -> ClaudeContext:
                     ctx.api_duration_ms = int(api_duration)
 
             # Parse context window
-            if 'context_window' in data:
-                cw = data['context_window']
+            cw = data.get('context_window')
+            if cw:
                 used_pct = cw.get('used_percentage')
                 if used_pct is not None:
                     ctx.ctx_used_pct = float(used_pct)
@@ -481,16 +487,25 @@ def parse_claude_context() -> ClaudeContext:
                 output_tokens = cw.get('total_output_tokens')
                 if output_tokens is not None:
                     ctx.output_tokens = int(output_tokens)
+                ctx_size = cw.get('context_window_size')
+                if ctx_size is not None:
+                    ctx.ctx_window_size = int(ctx_size)
+
+            # Parse exceeds_200k_tokens flag
+            if data.get('exceeds_200k_tokens'):
+                ctx.exceeds_200k = True
 
             # Parse vim mode
-            if 'vim' in data:
-                vim_mode = data['vim'].get('mode')
+            vim_data = data.get('vim')
+            if vim_data:
+                vim_mode = vim_data.get('mode')
                 if vim_mode:
                     ctx.vim_mode = vim_mode.upper()
 
             # Parse output style
-            if 'output_style' in data:
-                style_name = data['output_style'].get('name')
+            style_data = data.get('output_style')
+            if style_data:
+                style_name = style_data.get('name')
                 if style_name:
                     ctx.output_style = style_name
 
@@ -549,7 +564,10 @@ def _build_cost_segment(ctx: ClaudeContext, config: Config) -> Optional[str]:
 
     # Context window percentage (inside brackets with cost)
     if ctx.ctx_used_pct is not None:
-        metrics.append(format_ctx_color(ctx.ctx_used_pct))
+        ctx_str = format_ctx_color(ctx.ctx_used_pct)
+        if ctx.exceeds_200k:
+            ctx_str += f" {Colors.RED}200K+{Colors.RESET}"
+        metrics.append(ctx_str)
 
     if not metrics:
         return None
@@ -599,7 +617,7 @@ def _build_api_segment(ctx: ClaudeContext) -> Optional[str]:
 
 def _build_burnrate_segment(ctx: ClaudeContext) -> Optional[str]:
     """Build cost burn rate segment"""
-    if ctx.duration_seconds > 60 and ctx.cost_usd > 0:
+    if ctx.duration_seconds > 120 and ctx.cost_usd > 0:
         rate = ctx.cost_usd / (ctx.duration_seconds / 60)
         return f"{Colors.DIM}({rate:.2f}/m){Colors.RESET}"
     return None
@@ -646,7 +664,6 @@ def main():
         'lines': lambda: _build_lines_segment(context, trend_arrow),
         'api': lambda: _build_api_segment(context),
         'burnrate': lambda: _build_burnrate_segment(context) if config.show_burnrate else None,
-        'style': lambda: f"{Colors.DIM}({context.output_style}){Colors.RESET}" if context.output_style else None,
     }
 
     # When 'cost' is in layout, context is included inside the cost bracket,
@@ -656,7 +673,7 @@ def main():
     parts: List[str] = []
     # Header parts (vim, time, model, dir) are joined with spaces
     # The rest are joined with " | "
-    header_keys = {'vim', 'time', 'model', 'dir', 'cost'}
+    header_keys = {'vim', 'time', 'model', 'dir'}
 
     header_parts: List[str] = []
     metric_parts: List[str] = []
@@ -677,12 +694,12 @@ def main():
             metric_parts.append(result)
 
     # Build final output
-    header = ' '.join(header_parts) if header_parts else ''
-
-    if metric_parts:
-        output = f"{header} | {' | '.join(metric_parts)}"
-    elif header:
-        output = f"{header} | {Colors.DIM}Initializing...{Colors.RESET}"
+    if header_parts and metric_parts:
+        output = f"{' '.join(header_parts)} | {' | '.join(metric_parts)}"
+    elif header_parts:
+        output = f"{' '.join(header_parts)} | {Colors.DIM}Initializing...{Colors.RESET}"
+    elif metric_parts:
+        output = ' | '.join(metric_parts)
     else:
         output = f"{Colors.DIM}Initializing...{Colors.RESET}"
 

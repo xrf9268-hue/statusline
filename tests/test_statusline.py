@@ -240,12 +240,48 @@ class TestParseClaudeContext(unittest.TestCase):
         self.assertIsNone(result.ctx_used_pct)
         self.assertIsNone(result.ctx_remaining_pct)
 
+    def test_parse_context_window_section_null(self):
+        """Test that context_window: null doesn't crash"""
+        mock_input = json.dumps({
+            'context_window': None,
+            'vim': None,
+            'output_style': None
+        })
+        with patch('sys.stdin', StringIO(mock_input)):
+            result = statusline.parse_claude_context()
+        self.assertIsNone(result.ctx_used_pct)
+        self.assertIsNone(result.vim_mode)
+        self.assertIsNone(result.output_style)
+
     def test_parse_context_window_missing(self):
         """Test that missing context_window doesn't crash"""
         mock_input = json.dumps({'model': {'display_name': 'Test'}})
         with patch('sys.stdin', StringIO(mock_input)):
             result = statusline.parse_claude_context()
         self.assertIsNone(result.ctx_used_pct)
+
+    def test_parse_context_window_size(self):
+        """Test parsing context_window_size"""
+        mock_input = json.dumps({
+            'context_window': {'context_window_size': 200000}
+        })
+        with patch('sys.stdin', StringIO(mock_input)):
+            result = statusline.parse_claude_context()
+        self.assertEqual(result.ctx_window_size, 200000)
+
+    def test_parse_exceeds_200k_tokens(self):
+        """Test parsing exceeds_200k_tokens flag"""
+        mock_input = json.dumps({'exceeds_200k_tokens': True})
+        with patch('sys.stdin', StringIO(mock_input)):
+            result = statusline.parse_claude_context()
+        self.assertTrue(result.exceeds_200k)
+
+    def test_parse_exceeds_200k_tokens_false(self):
+        """Test exceeds_200k_tokens defaults to False"""
+        mock_input = json.dumps({'model': {'display_name': 'Test'}})
+        with patch('sys.stdin', StringIO(mock_input)):
+            result = statusline.parse_claude_context()
+        self.assertFalse(result.exceeds_200k)
 
     def test_parse_vim_mode(self):
         """Test parsing vim mode"""
@@ -289,7 +325,7 @@ class TestFormatHelpers(unittest.TestCase):
         self.assertEqual(statusline.format_tokens(500), '500')
 
     def test_format_tokens_thousands(self):
-        self.assertEqual(statusline.format_tokens(45000), '45K')
+        self.assertEqual(statusline.format_tokens(45000), '45.0K')
 
     def test_format_tokens_millions(self):
         self.assertEqual(statusline.format_tokens(1500000), '1.5M')
@@ -377,6 +413,12 @@ class TestSegmentBuilders(unittest.TestCase):
         self.assertIn('$0.125', result)
         self.assertIn('ctx:42%', result)
 
+    def test_cost_segment_exceeds_200k(self):
+        ctx = statusline.ClaudeContext(cost_str='$0.125', cost_usd=0.125, ctx_used_pct=80.0, exceeds_200k=True)
+        config = statusline.Config()
+        result = statusline._build_cost_segment(ctx, config)
+        self.assertIn('200K+', result)
+
     def test_cost_segment_none_when_empty(self):
         ctx = statusline.ClaudeContext()
         config = statusline.Config()
@@ -386,7 +428,7 @@ class TestSegmentBuilders(unittest.TestCase):
     def test_tokens_segment(self):
         ctx = statusline.ClaudeContext(input_tokens=45000, output_tokens=12000)
         result = statusline._build_tokens_segment(ctx)
-        self.assertIn('tok:45K/12K', result)
+        self.assertIn('tok:45.0K/12.0K', result)
 
     def test_tokens_segment_zero(self):
         ctx = statusline.ClaudeContext()
@@ -394,13 +436,13 @@ class TestSegmentBuilders(unittest.TestCase):
         self.assertIsNone(result)
 
     def test_burnrate_segment(self):
-        ctx = statusline.ClaudeContext(cost_usd=0.5, duration_seconds=300)
+        ctx = statusline.ClaudeContext(cost_usd=0.5, duration_seconds=300)  # 5min > 120s threshold
         result = statusline._build_burnrate_segment(ctx)
         self.assertIn('0.10/m', result)
 
     def test_burnrate_segment_short_session(self):
-        """Burn rate not shown for sessions under 60s"""
-        ctx = statusline.ClaudeContext(cost_usd=0.5, duration_seconds=30)
+        """Burn rate not shown for sessions under 120s"""
+        ctx = statusline.ClaudeContext(cost_usd=0.5, duration_seconds=60)
         result = statusline._build_burnrate_segment(ctx)
         self.assertIsNone(result)
 
@@ -571,6 +613,28 @@ class TestMainIntegration(unittest.TestCase):
         self.assertIn('Claude', output)
         self.assertNotIn('ctx:', output)
         self.assertNotIn('[N]', output)
+
+
+    @patch('sys.stdout', new_callable=StringIO)
+    def test_output_metrics_only_layout(self, mock_stdout):
+        """Test that metric-only layout doesn't produce leading separator"""
+        mock_input = json.dumps({
+            'model': {'display_name': 'Claude'},
+            'workspace': {'current_dir': '/tmp'},
+            'cost': {
+                'total_lines_added': 10,
+                'total_lines_removed': 5,
+                'total_api_duration_ms': 3000
+            }
+        })
+
+        with patch('sys.stdin', StringIO(mock_input)):
+            with patch.dict(os.environ, {'STATUSLINE_LAYOUT': 'lines,api'}):
+                statusline.main()
+
+        output = mock_stdout.getvalue().strip()
+        self.assertFalse(output.startswith('|'), f"Output should not start with '|': {output!r}")
+        self.assertFalse(output.startswith(' |'), f"Output should not start with ' |': {output!r}")
 
 
 if __name__ == '__main__':
