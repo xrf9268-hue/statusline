@@ -26,17 +26,18 @@ chmod +x ~/.claude/statusline-hz.py
 ## Example Output
 
 ```
-⏰ 14:30 | Sonnet 4.5 statusline:main● [$0.125 5m] | 📝 +127/-43 ↗ | ⚡5.0s
+[N] ⏰ 14:30 Sonnet 4.5 statusline:main● | [$0.125 5m ctx:42%] | 📝 +127/-43 ↗ | ⚡5.0s
 ```
 
 **Output Breakdown:**
 
 | Element | Description |
 |---------|-------------|
+| `[N]` | Vim mode indicator (N=Normal, I=Insert, V=Visual, R=Replace) |
 | `⏰ 14:30` | Current time |
-| `Sonnet 4.5` | AI model name (color: orange) |
+| `Sonnet 4.5` | AI model name (color: orange), with output style if set |
 | `statusline:main●` | Directory:branch (dirty indicator `●`) |
-| `[$0.125 5m]` | Session cost and duration (color: cyan) |
+| `[$0.125 5m ctx:42%]` | Session cost, duration, and context window usage |
 | `📝 +127/-43 ↗` | Lines added/removed with trend arrow (color: green) |
 | `⚡5.0s` | Cumulative API time (color-coded by session length) |
 
@@ -52,9 +53,17 @@ chmod +x ~/.claude/statusline-hz.py
 
 ### Advanced Features
 
+- **Vim Mode Indicator** - Shows current vim mode `[N]`/`[I]`/`[V]`/`[R]`/`[C]` with per-mode colors
+- **Context Window Usage** - Real-time `ctx:42%` display with 3-level color thresholds (green/yellow/red)
+- **Token Count Display** - Optional `tok:45.0K/12.0K` input/output token counts
+- **Cost Burn Rate** - Optional per-minute cost rate `(0.05/m)`
+- **Output Style Display** - Shows active output style next to model name
+- **200K+ Token Warning** - Alert when session exceeds 200K tokens
+- **Configurable Layout** - Customize segment order via `STATUSLINE_LAYOUT` environment variable
 - **Trend Analysis** - Compare current session with previous (`↗` increased, `→` similar, `↘` decreased, `(new)` first session)
 - **Cost Alerts** - Warning emoji `⚠️` when cost exceeds threshold
 - **Smart Color Coding** - Visual hierarchy for quick information parsing
+- **Cross-platform Support** - Works on macOS, Linux, and Windows (fcntl/msvcrt file locking)
 - **Graceful Degradation** - Works even without git or with invalid configuration
 - **Detached HEAD Support** - Shows short commit hash with `@` prefix when not on a branch
 - **Git Status Caching** - 5-second cache for performance optimization
@@ -90,7 +99,10 @@ Edit your `.claude/settings.json`:
   "env": {
     "STATUSLINE_COST_THRESHOLD": "0.50",
     "STATUSLINE_LOG_LEVEL": "WARNING",
-    "STATUSLINE_DEBUG": "0"
+    "STATUSLINE_DEBUG": "0",
+    "STATUSLINE_SHOW_TOKENS": "0",
+    "STATUSLINE_SHOW_BURNRATE": "0",
+    "STATUSLINE_LAYOUT": "vim,time,model,dir,cost,lines,api"
   }
 }
 ```
@@ -108,9 +120,39 @@ The statusline will appear at the bottom of your Claude Code interface.
 | `STATUSLINE_COST_THRESHOLD` | float | `0.50` | USD threshold for cost alerts |
 | `STATUSLINE_LOG_LEVEL` | string | `WARNING` | Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL, OFF) |
 | `STATUSLINE_DEBUG` | boolean | `0` | Enable debug mode (0 or 1) |
+| `STATUSLINE_SHOW_TOKENS` | boolean | `0` | Show input/output token counts |
+| `STATUSLINE_SHOW_BURNRATE` | boolean | `0` | Show cost burn rate per minute |
+| `STATUSLINE_LAYOUT` | string | `vim,time,model,dir,cost,lines,api` | Comma-separated segment order |
 | `NO_COLOR` | any | - | Disable color output (standard) |
 
+### Layout System
+
+The `STATUSLINE_LAYOUT` environment variable controls which segments appear and in what order. Available segments:
+
+| Segment | Description |
+|---------|-------------|
+| `vim` | Vim mode indicator |
+| `time` | Current time |
+| `model` | Model name (with output style) |
+| `dir` | Directory and git branch |
+| `cost` | Cost, duration, and context window |
+| `context` | Standalone context window (skipped when `cost` is in layout) |
+| `tokens` | Token counts (requires `STATUSLINE_SHOW_TOKENS=1`) |
+| `lines` | Code change statistics with trend |
+| `api` | API performance time |
+| `burnrate` | Cost burn rate (requires `STATUSLINE_SHOW_BURNRATE=1`) |
+
+Header segments (`vim`, `time`, `model`, `dir`) are joined with spaces. All other segments are separated by ` | `.
+
 ### Performance Indicators
+
+#### Context Window Usage Colors
+
+| Color | Range | Meaning |
+|-------|-------|---------|
+| 🟢 Green | < 50% | Plenty of context remaining |
+| 🟡 Yellow | 50% - 75% | Context getting used up |
+| 🔴 Red | ≥ 75% | Context nearly full |
 
 #### Cumulative API Time Colors
 
@@ -121,6 +163,16 @@ The API time shown is the **cumulative** time spent on API calls during the sess
 | 🟢 Green | < 10s | Fast session, minimal API usage |
 | 🟡 Yellow | 10s - 60s | Normal session, moderate API usage |
 | 🔴 Red | > 60s | Long session, significant API usage |
+
+#### Vim Mode Colors
+
+| Mode | Indicator | Color |
+|------|-----------|-------|
+| Normal | `[N]` | 🟢 Green |
+| Insert | `[I]` | 🟡 Yellow |
+| Visual | `[V]` | 🔵 Cyan |
+| Replace | `[R]` | 🔴 Red |
+| Command | `[C]` | Dim |
 
 #### Trend Arrows
 
@@ -155,6 +207,13 @@ The statusline extracts data from Claude Code's session context (passed via stdi
 | Session Duration | `cost.total_duration_ms` |
 | Working Directory | `workspace.current_dir` |
 | AI Model | `model.display_name` |
+| Context Window | `context_window.used_percentage` |
+| Context Size | `context_window.context_window_size` |
+| Input Tokens | `context_window.total_input_tokens` |
+| Output Tokens | `context_window.total_output_tokens` |
+| 200K+ Flag | `exceeds_200k_tokens` |
+| Vim Mode | `vim.mode` |
+| Output Style | `output_style.name` |
 
 ## Troubleshooting
 
@@ -204,7 +263,15 @@ echo '{
     "total_lines_added": 127,
     "total_lines_removed": 43,
     "total_api_duration_ms": 5000
-  }
+  },
+  "context_window": {
+    "used_percentage": 42.5,
+    "remaining_percentage": 57.5,
+    "total_input_tokens": 45000,
+    "total_output_tokens": 12000
+  },
+  "vim": {"mode": "normal"},
+  "output_style": {"name": "concise"}
 }' | python3 statusline-hz.py
 ```
 
