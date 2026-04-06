@@ -582,7 +582,19 @@ class TestGitStatusChecker(unittest.TestCase):
 class TestThemes(unittest.TestCase):
     """Test theme system"""
 
+    def setUp(self):
+        # NO_COLOR (often exported in CI) would force every theme to render
+        # empty escape sequences. Clear it for tests that exercise the
+        # colored render path; the dedicated NO_COLOR test re-injects it.
+        self._env_patcher = patch.dict(
+            os.environ,
+            {k: v for k, v in os.environ.items() if k != 'NO_COLOR'},
+            clear=True,
+        )
+        self._env_patcher.start()
+
     def tearDown(self):
+        self._env_patcher.stop()
         statusline.Colors.init_theme('default')
 
     def test_init_default_theme(self):
@@ -819,8 +831,11 @@ class TestMainIntegration(unittest.TestCase):
             'output_style': {'name': 'concise'}
         })
 
+        # Clear NO_COLOR so the assertion below works in CI environments
+        # that export it; we still want to verify the colored render path.
+        env_patch = {k: v for k, v in os.environ.items() if k != 'NO_COLOR'}
         with patch('sys.stdin', StringIO(mock_input)):
-            with patch.dict(os.environ, {}, clear=False):
+            with patch.dict(os.environ, env_patch, clear=True):
                 statusline.main()
 
         output = mock_stdout.getvalue()
