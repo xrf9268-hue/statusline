@@ -105,20 +105,24 @@ ICONS: Dict[str, Dict[str, str]] = {
     # advance only 1, causing the digit suffix to overdraw the glyph).
     # Emoji (⏰📝⚡) are fullwidth and handled correctly by terminals.
     'plain': {
-        'time':   '⏰',
-        'lines':  '📝',
-        'api':    '⚡',
-        'dirty':  '*',
-        'ahead':  '+',
-        'behind': '-',
+        'time':     '⏰',
+        'lines':    '📝',
+        'api':      '⚡',
+        'dirty':    '*',
+        'ahead':    '+',
+        'behind':   '-',
+        # ASCII fallback: U+2026 (…) is East Asian Ambiguous and overdraws
+        # under CJK fonts, same root cause as the dirty/ahead/behind glyphs.
+        'ellipsis': '..',
     },
     'nerd_font': {
-        'time':   '\uf017',
-        'lines':  '\uf044',
-        'api':    '\uf0e7',
-        'dirty':  '\uf444',
-        'ahead':  '↑',
-        'behind': '↓',
+        'time':     '\uf017',
+        'lines':    '\uf044',
+        'api':      '\uf0e7',
+        'dirty':    '\uf444',
+        'ahead':    '↑',
+        'behind':   '↓',
+        'ellipsis': '…',
     },
 }
 DEFAULT_ICON_MODE = 'plain'
@@ -133,6 +137,12 @@ GIT_DETAIL_FULL = 'full'
 GIT_DETAIL_SIMPLE = 'simple'
 GIT_DETAIL_OFF = 'off'
 DEFAULT_GIT_DETAIL = GIT_DETAIL_FULL
+
+# Branch name display
+# 25 matches Oh My Posh's common preset; long enough for typical
+# `feature/short-name` patterns, short enough to keep the bar compact.
+# Set to 0 (or any value <= 0) to disable truncation entirely.
+DEFAULT_BRANCH_MAX_LEN = 25
 
 # Visual context bar cell thresholds (cell width is 100/CTX_BAR_WIDTH = 10%)
 
@@ -223,6 +233,13 @@ class Config:
         self.icon_mode = _env_choice('STATUSLINE_ICON_MODE', DEFAULT_ICON_MODE, self.VALID_ICON_MODES)
         self.ctx_style = _env_choice('STATUSLINE_CTX_STYLE', DEFAULT_CTX_STYLE, self.VALID_CTX_STYLES)
         self.git_detail = _env_choice('STATUSLINE_GIT_DETAIL', DEFAULT_GIT_DETAIL, self.VALID_GIT_DETAILS)
+
+        # Branch name max length: integer >= 0; <= 0 disables truncation.
+        # Invalid values silently fall back to the default.
+        try:
+            self.branch_max_len = int(os.environ.get('STATUSLINE_BRANCH_MAX_LEN', DEFAULT_BRANCH_MAX_LEN))
+        except (ValueError, TypeError):
+            self.branch_max_len = DEFAULT_BRANCH_MAX_LEN
 
         self.model_aliases = self._parse_model_aliases()
 
@@ -602,8 +619,13 @@ def parse_claude_context(model_aliases: Optional[Dict[str, str]] = None) -> Clau
                     try:
                         content = git_head.read_text().strip()
                         if content.startswith('ref: '):
-                            # Normal branch reference
-                            ctx.branch = content.split('/')[-1]
+                            # Strip both prefixes individually: splitting on
+                            # '/' would silently drop nested namespaces such
+                            # as `feature/foo/bar`, mangling the display name.
+                            ctx.branch = (
+                                content.removeprefix('ref: ')
+                                       .removeprefix('refs/heads/')
+                            )
                         else:
                             # Detached HEAD - show short commit hash
                             ctx.branch = content[:7]
@@ -715,16 +737,31 @@ def _build_model_segment(ctx: ClaudeContext) -> str:
     return model_str
 
 
+def _truncate_branch(name: str, max_len: int, ellipsis: str) -> str:
+    """Right-truncate `name` to `max_len` chars and append `ellipsis`.
+
+    `max_len <= 0` disables truncation. The ellipsis is appended *after*
+    `max_len` chars so the visible width stays predictable across icon modes.
+    """
+    if max_len <= 0 or len(name) <= max_len:
+        return name
+    return name[:max_len] + ellipsis
+
+
 def _build_dir_segment(ctx: ClaudeContext, git_status: GitStatus, config: Config) -> str:
     """Build directory and branch segment with git indicators."""
     segment = f"{Colors.DIM}{ctx.dir}{Colors.RESET}"
     if not ctx.branch:
         return segment
 
+    branch_display = _truncate_branch(
+        ctx.branch, config.branch_max_len, config.icons['ellipsis']
+    )
+
     if ctx.detached:
-        segment += f":{Colors.DIM}@{ctx.branch}{Colors.RESET}"
+        segment += f":{Colors.DIM}@{branch_display}{Colors.RESET}"
     else:
-        segment += f":{ctx.branch}"
+        segment += f":{branch_display}"
 
     detail = config.git_detail
     if detail == GIT_DETAIL_OFF:
