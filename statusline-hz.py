@@ -127,8 +127,6 @@ GIT_DETAIL_OFF = 'off'
 DEFAULT_GIT_DETAIL = GIT_DETAIL_FULL
 
 # Visual context bar cell thresholds (cell width is 100/CTX_BAR_WIDTH = 10%)
-CTX_CELL_FULL_THRESHOLD = 8.0   # >= 80% of cell -> █
-CTX_CELL_HALF_THRESHOLD = 3.0   # >= 30% of cell -> ▄
 
 # ===================== Colors =====================
 class Colors:
@@ -530,45 +528,31 @@ def format_ctx_color(pct: float) -> str:
 
 
 def format_ctx_bar(pct: float, used_tokens: int, window_size: int) -> str:
-    """Return ASCII progress bar + percentage + token usage.
+    """Return progress bar + percentage + token usage.
 
-    Layout: [████▄░░░░░] 42% 84k/200k
+    Layout: [━━━━──────] 42% 84k/200k
 
-    Each cell is 10% wide. Within a cell:
-      █  filled  (>= CTX_CELL_FULL_THRESHOLD%)
-      ▄  half    (>= CTX_CELL_HALF_THRESHOLD%)
-      ░  empty
+    Uses Box Drawing characters (U+2500/U+2501) which are unambiguously
+    East-Asian-Narrow in Unicode and render as 1 cell in CJK fonts. Block
+    Elements (█/░) were rejected because some CJK fonts render them as
+    full-width glyphs while the terminal only advances one cell, causing
+    adjacent characters to overdraw the bar.
     """
     pct_clamped = max(0.0, min(100.0, pct))
     color = _ctx_color(pct_clamped)
     reset = Colors.RESET
     dim = Colors.DIM
 
-    # Group consecutive same-color glyphs to minimize ANSI escapes
-    filled_count = 0
-    empty_count = 0
-    for i in range(CTX_BAR_WIDTH):
-        progress = pct_clamped - i * (100.0 / CTX_BAR_WIDTH)
-        if progress >= CTX_CELL_FULL_THRESHOLD:
-            filled_count += 1
-        else:
-            break
-    half_glyph = ''
-    rest_start = filled_count
-    if rest_start < CTX_BAR_WIDTH:
-        progress = pct_clamped - rest_start * (100.0 / CTX_BAR_WIDTH)
-        if progress >= CTX_CELL_HALF_THRESHOLD:
-            half_glyph = '▄'
-            rest_start += 1
-    empty_count = CTX_BAR_WIDTH - filled_count - (1 if half_glyph else 0)
+    # Each cell = 10%; round half-up so 5% lights the first cell.
+    filled_count = int(pct_clamped / (100.0 / CTX_BAR_WIDTH) + 0.5)
+    filled_count = max(0, min(CTX_BAR_WIDTH, filled_count))
+    empty_count = CTX_BAR_WIDTH - filled_count
 
     parts: List[str] = []
-    if filled_count or half_glyph:
-        parts.append(f"{color}{'█' * filled_count}{half_glyph}{reset}")
+    if filled_count:
+        parts.append(f"{color}{'━' * filled_count}{reset}")
     if empty_count:
-        # No DIM wrap: '░' is already a low-density glyph; dimming makes it
-        # near-invisible on dark terminals and creates a "floating bar" effect.
-        parts.append('░' * empty_count)
+        parts.append(f"{dim}{'─' * empty_count}{reset}")
     bar = ''.join(parts)
 
     pct_str = f"{color}{pct_clamped:.0f}%{reset}"
@@ -744,12 +728,17 @@ def _build_dir_segment(ctx: ClaudeContext, git_status: GitStatus, config: Config
         return segment
 
     # GIT_DETAIL_FULL
+    # Dirty count (worktree state) glues to branch; upstream sync indicators
+    # get a leading space so multi-digit counts stay readable: 'main●12 ↑99↓42'.
     if git_status.dirty_count > 0:
         segment += f"{Colors.RED}●{git_status.dirty_count}{Colors.RESET}"
+    upstream_parts = []
     if git_status.ahead > 0:
-        segment += f"{Colors.CYAN}↑{git_status.ahead}{Colors.RESET}"
+        upstream_parts.append(f"{Colors.CYAN}↑{git_status.ahead}{Colors.RESET}")
     if git_status.behind > 0:
-        segment += f"{Colors.YELLOW}↓{git_status.behind}{Colors.RESET}"
+        upstream_parts.append(f"{Colors.YELLOW}↓{git_status.behind}{Colors.RESET}")
+    if upstream_parts:
+        segment += ' ' + ''.join(upstream_parts)
     return segment
 
 

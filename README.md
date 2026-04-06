@@ -26,7 +26,7 @@ chmod +x ~/.claude/statusline-hz.py
 ## Example Output
 
 ```
-[N] ⏰ 14:30 Sonnet 4.5 statusline:main●2↑1 | [$0.125 5m [████░░░░░░] 42% 57k/200k] | 📝 +127/-43 ↗ | ⚡5.0s
+[N] ⏰ 14:30 Sonnet 4.5 statusline:main●2 ↑1 | $0.125 5m [━━━━──────] 42% 57k/200k | 📝 +127/-43 ↗ | ⚡5.0s
 ```
 
 **Output Breakdown:**
@@ -37,7 +37,7 @@ chmod +x ~/.claude/statusline-hz.py
 | `⏰ 14:30` | Current time |
 | `Sonnet 4.5` | AI model name (color: orange), with output style if set |
 | `statusline:main●2↑1` | Directory:branch with 2 uncommitted files, 1 ahead of upstream |
-| `[$0.125 5m [████░░░░░░] 42% 57k/200k]` | Session cost, duration, visual context window bar with token usage |
+| `$0.125 5m [━━━━──────] 42% 57k/200k` | Session cost, duration, visual context window bar with token usage |
 | `📝 +127/-43 ↗` | Lines added/removed with trend arrow (color: green) |
 | `⚡5.0s` | Cumulative API time (color-coded by session length) |
 
@@ -54,7 +54,7 @@ chmod +x ~/.claude/statusline-hz.py
 ### Advanced Features
 
 - **Vim Mode Indicator** - Shows current vim mode `[N]`/`[I]`/`[V]`/`[R]`/`[C]` with per-mode colors
-- **Visual Context Window Bar** - ASCII progress bar `[████░░░░░░] 42% 57k/200k` with 3-level color thresholds (green/yellow/red); legacy `ctx:42%` text mode also available
+- **Visual Context Window Bar** - Progress bar `[━━━━──────] 42% 57k/200k` with 3-level color thresholds (green/yellow/red); uses Box Drawing glyphs for safe CJK font rendering; legacy `ctx:42%` text mode also available
 - **Git Detail** - Uncommitted file count + upstream ahead/behind indicators (`main●3↑2↓1`)
 - **Theme System** - Built-in palettes: `default`, `gruvbox`, `nord`, `minimal` (env switch)
 - **Nerd Font Icons** - Optional Nerd Font glyph mode in addition to plain emoji icons
@@ -163,8 +163,9 @@ Header segments (`vim`, `time`, `model`, `dir`) are joined with spaces. All othe
 | 🟡 Yellow | 50% - 75% | Context getting used up |
 | 🔴 Red | ≥ 75% | Context nearly full |
 
-The default visual bar `[████░░░░░░] 42% 57k/200k` uses three glyphs per cell:
-`█` (filled, ≥80% of cell), `▄` (half, ≥30% of cell), `░` (empty). Set
+The default visual bar `[━━━━──────] 42% 57k/200k` uses Box Drawing
+characters (`━` filled, `─` empty), which are unambiguously narrow in
+all CJK fonts. Each cell represents 10%, rounded half-up. Set
 `STATUSLINE_CTX_STYLE=text` to fall back to the legacy `ctx:42%` format.
 
 #### Themes

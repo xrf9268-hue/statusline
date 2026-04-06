@@ -424,7 +424,7 @@ class TestSegmentBuilders(unittest.TestCase):
         result = statusline._build_cost_segment(ctx, config)
         self.assertIn('$0.125', result)
         self.assertIn('42%', result)
-        self.assertIn('█', result)        # bar glyph
+        self.assertIn('━', result)        # bar glyph
         self.assertIn('57.0K', result)    # used tokens shown
 
     def test_cost_segment_exceeds_200k(self):
@@ -646,17 +646,20 @@ class TestCtxBar(unittest.TestCase):
 
     def test_empty_bar(self):
         result = statusline.format_ctx_bar(0.0, 0, 200000)
-        self.assertIn('░', result)
+        self.assertIn('─', result)
         self.assertIn('0%', result)
 
     def test_half_bar(self):
         result = statusline.format_ctx_bar(50.0, 100000, 200000)
+        self.assertIn('━', result)
+        self.assertIn('─', result)
         self.assertIn('50%', result)
         self.assertIn('100.0K/200.0K', result)
 
     def test_full_bar(self):
         result = statusline.format_ctx_bar(100.0, 200000, 200000)
-        self.assertIn('█', result)
+        self.assertIn('━', result)
+        self.assertNotIn('─', result)
         self.assertIn('100%', result)
 
     def test_clamps_overflow(self):
@@ -815,7 +818,7 @@ class TestMainIntegration(unittest.TestCase):
         self.assertIn('Sonnet 4.5', output)
         # Default style now renders a visual context bar
         self.assertIn('42%', output)
-        self.assertIn('█', output)
+        self.assertIn('━', output)
         # Vim N indicator is wrapped in ANSI color codes; match by substring
         self.assertRegex(output, r'\[\x1b\[[0-9;]+mN\x1b\[0m\]')
         self.assertIn('concise', output)
