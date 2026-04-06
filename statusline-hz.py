@@ -81,23 +81,100 @@ VIM_MODE_MAP = {
 # Default layout segments
 DEFAULT_LAYOUT = 'vim,time,model,dir,cost,lines,api'
 
+# Default context window size when not provided by Claude Code
+DEFAULT_CTX_WINDOW = 200000
+
+# Visual context bar width (characters)
+CTX_BAR_WIDTH = 10
+
+# ===================== Themes =====================
+# Each theme maps semantic name -> 256-color code.
+# DIM=None means use ANSI 2 (faint) instead of an explicit color.
+THEMES: Dict[str, Dict[str, Optional[int]]] = {
+    'default': {'ORANGE': 173, 'CYAN': 87,  'GREEN': 78,  'YELLOW': 185, 'RED': 167, 'DIM': None},
+    'gruvbox': {'ORANGE': 208, 'CYAN': 109, 'GREEN': 142, 'YELLOW': 214, 'RED': 167, 'DIM': 245},
+    'nord':    {'ORANGE': 209, 'CYAN': 110, 'GREEN': 108, 'YELLOW': 222, 'RED': 174, 'DIM': 240},
+    'minimal': {'ORANGE': 244, 'CYAN': 244, 'GREEN': 244, 'YELLOW': 244, 'RED': 167, 'DIM': 240},
+}
+DEFAULT_THEME = 'default'
+
+# ===================== Icons =====================
+ICONS: Dict[str, Dict[str, str]] = {
+    # plain mode: ASCII for git indicators (●/↑/↓ are Unicode East Asian
+    # Ambiguous width — CJK fonts render them as 2 cells while terminals
+    # advance only 1, causing the digit suffix to overdraw the glyph).
+    # Emoji (⏰📝⚡) are fullwidth and handled correctly by terminals.
+    'plain': {
+        'time':   '⏰',
+        'lines':  '📝',
+        'api':    '⚡',
+        'dirty':  '*',
+        'ahead':  '+',
+        'behind': '-',
+    },
+    'nerd_font': {
+        'time':   '\uf017',
+        'lines':  '\uf044',
+        'api':    '\uf0e7',
+        'dirty':  '\uf444',
+        'ahead':  '↑',
+        'behind': '↓',
+    },
+}
+DEFAULT_ICON_MODE = 'plain'
+
+# Context display style values
+CTX_STYLE_BAR = 'bar'
+CTX_STYLE_TEXT = 'text'
+DEFAULT_CTX_STYLE = CTX_STYLE_BAR
+
+# Git detail level values
+GIT_DETAIL_FULL = 'full'
+GIT_DETAIL_SIMPLE = 'simple'
+GIT_DETAIL_OFF = 'off'
+DEFAULT_GIT_DETAIL = GIT_DETAIL_FULL
+
+# Visual context bar cell thresholds (cell width is 100/CTX_BAR_WIDTH = 10%)
+
 # ===================== Colors =====================
 class Colors:
-    """ANSI color codes for terminal output (eye-friendly palette)"""
+    """ANSI color codes for terminal output (theme-aware)"""
 
-    _enabled = 'NO_COLOR' not in os.environ
+    # Initialized to default theme so module-level access works without Config
+    ORANGE = '\033[38;5;173m'
+    CYAN = '\033[38;5;87m'
+    GREEN = '\033[38;5;78m'
+    YELLOW = '\033[38;5;185m'
+    RED = '\033[38;5;167m'
+    DIM = '\033[2m'
+    RESET = '\033[0m'
 
-    ORANGE = '\033[38;5;173m' if _enabled else ''   # Model name
-    CYAN = '\033[38;5;87m' if _enabled else ''      # Cost/metrics
-    DIM = '\033[2m' if _enabled else ''             # Secondary info
-    GREEN = '\033[38;5;78m' if _enabled else ''     # Positive/fast
-    YELLOW = '\033[38;5;185m' if _enabled else ''   # Warning/moderate
-    RED = '\033[38;5;167m' if _enabled else ''      # Alert/slow
-    RESET = '\033[0m' if _enabled else ''
+    @classmethod
+    def init_theme(cls, theme_name: str = DEFAULT_THEME):
+        """Apply named theme palette. NO_COLOR env var forces all codes empty.
+
+        Unknown names fall back to the default palette.
+        """
+        if 'NO_COLOR' in os.environ:
+            cls.disable()
+            return
+
+        palette = THEMES.get(theme_name)
+        if palette is None:
+            logging.debug(f"Unknown theme '{theme_name}', using default")
+            palette = THEMES[DEFAULT_THEME]
+
+        for name in ('ORANGE', 'CYAN', 'GREEN', 'YELLOW', 'RED'):
+            code = palette.get(name)
+            setattr(cls, name, f'\033[38;5;{code}m' if code is not None else '')
+
+        dim_code = palette.get('DIM')
+        cls.DIM = f'\033[38;5;{dim_code}m' if dim_code is not None else '\033[2m'
+        cls.RESET = '\033[0m'
 
     @classmethod
     def disable(cls):
-        """Disable all colors"""
+        """Clear all color codes"""
         cls.ORANGE = cls.CYAN = cls.DIM = ''
         cls.GREEN = cls.YELLOW = cls.RED = cls.RESET = ''
 
@@ -106,44 +183,70 @@ class Colors:
         """Get color by name string"""
         return getattr(cls, name, '')
 
+
+def _env_choice(name: str, default: str, valid: List[str]) -> str:
+    """Read an enum-style env var, falling back to default if unset/invalid."""
+    value = os.environ.get(name, default)
+    return value if value in valid else default
+
 # ===================== Configuration =====================
 class Config:
     """Configuration management for statusline"""
 
     VALID_LOG_LEVELS = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL', 'OFF']
+    VALID_CTX_STYLES = [CTX_STYLE_BAR, CTX_STYLE_TEXT]
+    VALID_GIT_DETAILS = [GIT_DETAIL_FULL, GIT_DETAIL_SIMPLE, GIT_DETAIL_OFF]
+    VALID_ICON_MODES = list(ICONS.keys())
 
     def __init__(self):
-        # Cost Alert Configuration - with error handling
         try:
             self.cost_threshold = float(os.environ.get('STATUSLINE_COST_THRESHOLD', '0.50'))
             if self.cost_threshold < 0:
                 self.cost_threshold = 0.50
         except (ValueError, TypeError):
-            self.cost_threshold = 0.50  # Fallback to default
+            self.cost_threshold = 0.50
 
-        # Cache directory for trends
         self.cache_dir_base = Path.home() / '.cache' / 'claude-statusline'
         self.stats_cache_file = self.cache_dir_base / 'session_stats.json'
 
-        # Logging - default to WARNING for better performance
         log_level_str = os.environ.get('STATUSLINE_LOG_LEVEL', 'WARNING').upper()
         self.log_level = log_level_str if log_level_str in self.VALID_LOG_LEVELS else 'WARNING'
         self.log_dir = self.cache_dir_base / 'logs'
 
-        # Debug Mode
         self.debug = os.environ.get('STATUSLINE_DEBUG', '0') == '1'
 
-        # Color Output - also update Colors class
+        # Theme must be applied before any rendering reads Colors.*
+        self.theme = os.environ.get('STATUSLINE_THEME', DEFAULT_THEME)
+        Colors.init_theme(self.theme)
         self.no_color = 'NO_COLOR' in os.environ
-        if self.no_color:
-            Colors.disable()
 
-        # Feature toggles
+        self.icon_mode = _env_choice('STATUSLINE_ICON_MODE', DEFAULT_ICON_MODE, self.VALID_ICON_MODES)
+        self.ctx_style = _env_choice('STATUSLINE_CTX_STYLE', DEFAULT_CTX_STYLE, self.VALID_CTX_STYLES)
+        self.git_detail = _env_choice('STATUSLINE_GIT_DETAIL', DEFAULT_GIT_DETAIL, self.VALID_GIT_DETAILS)
+
+        self.model_aliases = self._parse_model_aliases()
+
         self.show_tokens = os.environ.get('STATUSLINE_SHOW_TOKENS', '0') == '1'
         self.show_burnrate = os.environ.get('STATUSLINE_SHOW_BURNRATE', '0') == '1'
 
-        # Layout configuration
         self.layout = os.environ.get('STATUSLINE_LAYOUT', DEFAULT_LAYOUT).split(',')
+
+    @property
+    def icons(self) -> Dict[str, str]:
+        return ICONS[self.icon_mode]
+
+    @staticmethod
+    def _parse_model_aliases() -> Dict[str, str]:
+        raw = os.environ.get('STATUSLINE_MODEL_ALIASES', '').strip()
+        if not raw:
+            return {}
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                return {str(k): str(v) for k, v in parsed.items()}
+        except (json.JSONDecodeError, TypeError, ValueError) as e:
+            logging.debug(f"Invalid STATUSLINE_MODEL_ALIASES: {e}")
+        return {}
 
     def ensure_directories(self) -> bool:
         """Ensure required directories exist (initialization)"""
@@ -247,58 +350,89 @@ def setup_logging(config: Config):
         # If logging setup fails, disable logging but continue
         logging.disable(logging.CRITICAL)
 
-# ===================== Git Status Checker =====================
+# ===================== Git Status =====================
+import re
+
+# 'main...origin/main [ahead 2, behind 1]' -> capture ahead/behind ints
+_BRANCH_AHEAD_RE = re.compile(r'ahead (\d+)')
+_BRANCH_BEHIND_RE = re.compile(r'behind (\d+)')
+
+
+@dataclass
+class GitStatus:
+    """Structured git working tree state"""
+    dirty_count: int = 0
+    ahead: int = 0
+    behind: int = 0
+
+    @property
+    def is_dirty(self) -> bool:
+        return self.dirty_count > 0
+
+
 class GitStatusChecker:
     """Check git repository status with caching for performance"""
 
-    # Cache: {cwd: (is_dirty, timestamp)}
-    _cache: Dict[str, Tuple[bool, float]] = {}
+    # Per-process cache. Statusline runs as a one-shot CLI so this holds at
+    # most one entry per invocation; no LRU/eviction needed.
+    _cache: Dict[str, Tuple[GitStatus, float]] = {}
 
     @classmethod
-    def check_dirty_status(cls, cwd: str) -> bool:
-        """Check if git repo has uncommitted changes (with caching)"""
+    def check_status(cls, cwd: str) -> GitStatus:
         now = time.time()
+        cached = cls._cache.get(cwd)
+        if cached and now - cached[1] < GIT_CACHE_TTL_SECONDS:
+            return cached[0]
 
-        # Check cache first
-        if cwd in cls._cache:
-            is_dirty, cached_at = cls._cache[cwd]
-            if now - cached_at < GIT_CACHE_TTL_SECONDS:
-                return is_dirty
-
-        # Cache miss or expired - perform actual check
-        is_dirty = cls._check_dirty_impl(cwd)
-        cls._cache[cwd] = (is_dirty, now)
-        return is_dirty
+        status = cls._check_status_impl(cwd)
+        cls._cache[cwd] = (status, now)
+        return status
 
     @staticmethod
-    def _check_dirty_impl(cwd: str) -> bool:
-        """Actual git dirty status check implementation"""
+    def _check_status_impl(cwd: str) -> GitStatus:
+        status = GitStatus()
         try:
-            git_dir = Path(cwd) / '.git'
-            if not git_dir.exists():
-                return False
+            if not (Path(cwd) / '.git').exists():
+                return status
 
-            # Quick check using git status --porcelain (with --no-optional-locks to avoid blocking)
             result = subprocess.run(
-                ['git', '--no-optional-locks', 'status', '--porcelain'],
+                ['git', '--no-optional-locks', 'status', '--porcelain', '--branch'],
                 cwd=cwd,
                 capture_output=True,
                 text=True,
                 timeout=GIT_TIMEOUT_SECONDS
             )
 
-            # If output is not empty, there are uncommitted changes
-            return bool(result.stdout.strip())
+            lines = result.stdout.splitlines()
+            if not lines:
+                return status
+
+            if lines[0].startswith('## '):
+                GitStatusChecker._parse_branch_header(lines[0][3:], status)
+                file_lines = lines[1:]
+            else:
+                file_lines = lines
+
+            status.dirty_count = sum(1 for ln in file_lines if ln.strip())
+            return status
 
         except FileNotFoundError:
             logging.debug("Git command not found")
-            return False
         except subprocess.TimeoutExpired:
             logging.debug("Git status check timed out")
-            return False
         except (OSError, subprocess.SubprocessError) as e:
             logging.debug(f"Failed to check git status: {e}")
-            return False
+        return status
+
+    @staticmethod
+    def _parse_branch_header(header: str, status: GitStatus):
+        """Parse 'main...origin/main [ahead 2, behind 1]' branch line"""
+        m = _BRANCH_AHEAD_RE.search(header)
+        if m:
+            status.ahead = int(m.group(1))
+        m = _BRANCH_BEHIND_RE.search(header)
+        if m:
+            status.behind = int(m.group(1))
 
 # ===================== Stats Tracker =====================
 class StatsTracker:
@@ -387,29 +521,74 @@ def format_tokens(count: int) -> str:
     return str(count)
 
 
-def format_ctx_color(pct: float) -> str:
-    """Return colored context percentage string"""
+def _ctx_color(pct: float) -> str:
+    """Pick color by context-window threshold"""
     if pct < CTX_LOW:
-        color = Colors.GREEN
-    elif pct < CTX_MED:
-        color = Colors.YELLOW
-    else:
-        color = Colors.RED
-    return f"{color}ctx:{pct:.0f}%{Colors.RESET}"
+        return Colors.GREEN
+    if pct < CTX_MED:
+        return Colors.YELLOW
+    return Colors.RED
+
+
+def format_ctx_color(pct: float) -> str:
+    """Return colored context percentage string (legacy text format)"""
+    return f"{_ctx_color(pct)}ctx:{pct:.0f}%{Colors.RESET}"
+
+
+def format_ctx_bar(pct: float, used_tokens: int, window_size: int) -> str:
+    """Return progress bar + percentage + token usage.
+
+    Layout: [━━━━──────] 42% 84k/200k
+
+    Uses Box Drawing characters (U+2500/U+2501) which are unambiguously
+    East-Asian-Narrow in Unicode and render as 1 cell in CJK fonts. Block
+    Elements (█/░) were rejected because some CJK fonts render them as
+    full-width glyphs while the terminal only advances one cell, causing
+    adjacent characters to overdraw the bar.
+    """
+    pct_clamped = max(0.0, min(100.0, pct))
+    color = _ctx_color(pct_clamped)
+    reset = Colors.RESET
+    dim = Colors.DIM
+
+    # Each cell = 10%; round half-up so 5% lights the first cell.
+    filled_count = int(pct_clamped / (100.0 / CTX_BAR_WIDTH) + 0.5)
+    filled_count = max(0, min(CTX_BAR_WIDTH, filled_count))
+    empty_count = CTX_BAR_WIDTH - filled_count
+
+    parts: List[str] = []
+    if filled_count:
+        parts.append(f"{color}{'━' * filled_count}{reset}")
+    if empty_count:
+        parts.append(f"{dim}{'─' * empty_count}{reset}")
+    bar = ''.join(parts)
+
+    pct_str = f"{color}{pct_clamped:.0f}%{reset}"
+    token_str = (
+        f" {dim}{format_tokens(used_tokens)}/{format_tokens(window_size)}{reset}"
+        if used_tokens > 0 and window_size > 0 else ''
+    )
+    return f"[{bar}] {pct_str}{token_str}"
 
 # ===================== Claude Context Parser =====================
-def parse_claude_context() -> ClaudeContext:
+def parse_claude_context(model_aliases: Optional[Dict[str, str]] = None) -> ClaudeContext:
     """Parse Claude Code context from stdin - enhanced with productivity metrics"""
     ctx = ClaudeContext()
+    aliases = model_aliases or {}
 
     try:
         input_data = sys.stdin.read()
         if input_data:
             data = json.loads(input_data)
 
-            # Parse model
             if 'model' in data:
-                ctx.model = data['model'].get('display_name') or data['model'].get('id', 'Claude')
+                model_id = data['model'].get('id', '')
+                display_name = data['model'].get('display_name') or model_id or 'Claude'
+                # Aliases match on id first, then display_name
+                ctx.model = next(
+                    (aliases[k] for k in (model_id, display_name) if k and k in aliases),
+                    display_name,
+                )
 
             # Parse directory
             if 'workspace' in data:
@@ -524,9 +703,8 @@ def _build_vim_segment(ctx: ClaudeContext) -> Optional[str]:
     return f"[{color}{abbr}{Colors.RESET}]"
 
 
-def _build_time_segment() -> str:
-    """Build time segment"""
-    return f"⏰ {datetime.now().strftime('%H:%M')}"
+def _build_time_segment(config: Config) -> str:
+    return f"{config.icons['time']} {datetime.now().strftime('%H:%M')}"
 
 
 def _build_model_segment(ctx: ClaudeContext) -> str:
@@ -537,16 +715,38 @@ def _build_model_segment(ctx: ClaudeContext) -> str:
     return model_str
 
 
-def _build_dir_segment(ctx: ClaudeContext, is_dirty: bool) -> str:
-    """Build directory and branch segment"""
+def _build_dir_segment(ctx: ClaudeContext, git_status: GitStatus, config: Config) -> str:
+    """Build directory and branch segment with git indicators."""
     segment = f"{Colors.DIM}{ctx.dir}{Colors.RESET}"
-    if ctx.branch:
-        if ctx.detached:
-            segment += f":{Colors.DIM}@{ctx.branch}{Colors.RESET}"
-        else:
-            segment += f":{ctx.branch}"
-        if is_dirty:
-            segment += f"{Colors.RED}●{Colors.RESET}"
+    if not ctx.branch:
+        return segment
+
+    if ctx.detached:
+        segment += f":{Colors.DIM}@{ctx.branch}{Colors.RESET}"
+    else:
+        segment += f":{ctx.branch}"
+
+    detail = config.git_detail
+    if detail == GIT_DETAIL_OFF:
+        return segment
+
+    icons = config.icons
+    if detail == GIT_DETAIL_SIMPLE:
+        if git_status.is_dirty:
+            segment += f"{Colors.RED}{icons['dirty']}{Colors.RESET}"
+        return segment
+
+    # GIT_DETAIL_FULL: dirty (worktree) glues to branch; upstream sync
+    # indicators get a leading space so multi-digit counts stay readable.
+    if git_status.dirty_count > 0:
+        segment += f"{Colors.RED}{icons['dirty']}{git_status.dirty_count}{Colors.RESET}"
+    upstream_parts = []
+    if git_status.ahead > 0:
+        upstream_parts.append(f"{Colors.CYAN}{icons['ahead']}{git_status.ahead}{Colors.RESET}")
+    if git_status.behind > 0:
+        upstream_parts.append(f"{Colors.YELLOW}{icons['behind']}{git_status.behind}{Colors.RESET}")
+    if upstream_parts:
+        segment += ' ' + ' '.join(upstream_parts)
     return segment
 
 
@@ -562,23 +762,32 @@ def _build_cost_segment(ctx: ClaudeContext, config: Config) -> Optional[str]:
     if ctx.duration:
         metrics.append(f"{Colors.CYAN}{ctx.duration}{Colors.RESET}")
 
-    # Context window percentage (inside brackets with cost)
     if ctx.ctx_used_pct is not None:
-        ctx_str = format_ctx_color(ctx.ctx_used_pct)
+        ctx_str = _render_ctx(ctx, config)
         if ctx.exceeds_200k:
             ctx_str += f" {Colors.RED}200K+{Colors.RESET}"
         metrics.append(ctx_str)
 
     if not metrics:
         return None
-    return f"[{' '.join(metrics)}]"
+    return ' '.join(metrics)
 
 
-def _build_context_segment(ctx: ClaudeContext) -> Optional[str]:
-    """Build standalone context window segment (when not in cost bracket)"""
-    if ctx.ctx_used_pct is not None:
-        return format_ctx_color(ctx.ctx_used_pct)
-    return None
+def _render_ctx(ctx: ClaudeContext, config: Config) -> str:
+    """Render context window indicator per configured style."""
+    pct = ctx.ctx_used_pct or 0.0
+    if config.ctx_style == CTX_STYLE_TEXT:
+        return format_ctx_color(pct)
+    used = ctx.input_tokens + ctx.output_tokens
+    window = ctx.ctx_window_size or DEFAULT_CTX_WINDOW
+    return format_ctx_bar(pct, used, window)
+
+
+def _build_context_segment(ctx: ClaudeContext, config: Config) -> Optional[str]:
+    """Build standalone context window segment (used when 'cost' is not in layout)"""
+    if ctx.ctx_used_pct is None:
+        return None
+    return _render_ctx(ctx, config)
 
 
 def _build_tokens_segment(ctx: ClaudeContext) -> Optional[str]:
@@ -588,18 +797,30 @@ def _build_tokens_segment(ctx: ClaudeContext) -> Optional[str]:
     return None
 
 
-def _build_lines_segment(ctx: ClaudeContext, trend_arrow: str) -> str:
+def _build_lines_segment(ctx: ClaudeContext, trend_arrow: str, config: Config) -> str:
     """Build code change statistics segment"""
+    icon = config.icons['lines']
     if ctx.lines_added > 0 or ctx.lines_removed > 0:
-        return f"{Colors.GREEN}📝 +{ctx.lines_added}/-{ctx.lines_removed}{trend_arrow}{Colors.RESET}"
-    return f"{Colors.DIM}📝 0/0{trend_arrow}{Colors.RESET}"
+        return f"{Colors.GREEN}{icon} +{ctx.lines_added}/-{ctx.lines_removed}{trend_arrow}{Colors.RESET}"
+    return f"{Colors.DIM}{icon} 0/0{trend_arrow}{Colors.RESET}"
 
 
-def _build_api_segment(ctx: ClaudeContext) -> Optional[str]:
+def _api_perf_color(api_duration_ms: int) -> str:
+    """Pick color by cumulative API time"""
+    if api_duration_ms < PERF_FAST_MS:
+        return Colors.GREEN
+    if api_duration_ms < PERF_MODERATE_MS:
+        return Colors.YELLOW
+    return Colors.RED
+
+
+def _build_api_segment(ctx: ClaudeContext, config: Config) -> Optional[str]:
     """Build API performance segment"""
     api_duration = ctx.api_duration_ms
     if api_duration <= 0:
         return None
+
+    icon = config.icons['api']
 
     if api_duration < 1000:
         api_str = f"{api_duration}ms"
@@ -608,11 +829,7 @@ def _build_api_segment(ctx: ClaudeContext) -> Optional[str]:
     else:
         api_str = f"{api_duration/60000:.1f}m"
 
-    if api_duration < PERF_FAST_MS:
-        return f"{Colors.GREEN}⚡{api_str}{Colors.RESET}"
-    elif api_duration < PERF_MODERATE_MS:
-        return f"{Colors.YELLOW}⚡{api_str}{Colors.RESET}"
-    return f"{Colors.RED}⚡{api_str}{Colors.RESET}"
+    return f"{_api_perf_color(api_duration)}{icon}{api_str}{Colors.RESET}"
 
 
 def _build_burnrate_segment(ctx: ClaudeContext) -> Optional[str]:
@@ -638,12 +855,10 @@ def main():
         print("ERROR: Configuration invalid")
         sys.exit(1)
 
-    # Parse Claude context
-    context = parse_claude_context()
+    context = parse_claude_context(config.model_aliases)
     logging.debug(f"Context: {context}")
 
-    # Check git dirty status
-    is_dirty = GitStatusChecker.check_dirty_status(context.cwd)
+    git_status = GitStatusChecker.check_status(context.cwd)
 
     # Get code change trend
     tracker = StatsTracker(config)
@@ -655,14 +870,14 @@ def main():
     # Segment builders map
     segment_builders = {
         'vim': lambda: _build_vim_segment(context),
-        'time': lambda: _build_time_segment(),
+        'time': lambda: _build_time_segment(config),
         'model': lambda: _build_model_segment(context),
-        'dir': lambda: _build_dir_segment(context, is_dirty),
+        'dir': lambda: _build_dir_segment(context, git_status, config),
         'cost': lambda: _build_cost_segment(context, config),
-        'context': lambda: _build_context_segment(context),
+        'context': lambda: _build_context_segment(context, config),
         'tokens': lambda: _build_tokens_segment(context) if config.show_tokens else None,
-        'lines': lambda: _build_lines_segment(context, trend_arrow),
-        'api': lambda: _build_api_segment(context),
+        'lines': lambda: _build_lines_segment(context, trend_arrow, config),
+        'api': lambda: _build_api_segment(context, config),
         'burnrate': lambda: _build_burnrate_segment(context) if config.show_burnrate else None,
     }
 
