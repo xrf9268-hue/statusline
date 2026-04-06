@@ -26,7 +26,7 @@ chmod +x ~/.claude/statusline-hz.py
 ## Example Output
 
 ```
-[N] ⏰ 14:30 Sonnet 4.5 statusline:main● | [$0.125 5m ctx:42%] | 📝 +127/-43 ↗ | ⚡5.0s
+[N] ⏰ 14:30 Sonnet 4.5 statusline:main●2↑1 | [$0.125 5m [████░░░░░░] 42% 57k/200k] | 📝 +127/-43 ↗ | ⚡5.0s
 ```
 
 **Output Breakdown:**
@@ -36,8 +36,8 @@ chmod +x ~/.claude/statusline-hz.py
 | `[N]` | Vim mode indicator (N=Normal, I=Insert, V=Visual, R=Replace) |
 | `⏰ 14:30` | Current time |
 | `Sonnet 4.5` | AI model name (color: orange), with output style if set |
-| `statusline:main●` | Directory:branch (dirty indicator `●`) |
-| `[$0.125 5m ctx:42%]` | Session cost, duration, and context window usage |
+| `statusline:main●2↑1` | Directory:branch with 2 uncommitted files, 1 ahead of upstream |
+| `[$0.125 5m [████░░░░░░] 42% 57k/200k]` | Session cost, duration, visual context window bar with token usage |
 | `📝 +127/-43 ↗` | Lines added/removed with trend arrow (color: green) |
 | `⚡5.0s` | Cumulative API time (color-coded by session length) |
 
@@ -54,7 +54,11 @@ chmod +x ~/.claude/statusline-hz.py
 ### Advanced Features
 
 - **Vim Mode Indicator** - Shows current vim mode `[N]`/`[I]`/`[V]`/`[R]`/`[C]` with per-mode colors
-- **Context Window Usage** - Real-time `ctx:42%` display with 3-level color thresholds (green/yellow/red)
+- **Visual Context Window Bar** - ASCII progress bar `[████░░░░░░] 42% 57k/200k` with 3-level color thresholds (green/yellow/red); legacy `ctx:42%` text mode also available
+- **Git Detail** - Uncommitted file count + upstream ahead/behind indicators (`main●3↑2↓1`)
+- **Theme System** - Built-in palettes: `default`, `gruvbox`, `nord`, `minimal` (env switch)
+- **Nerd Font Icons** - Optional Nerd Font glyph mode in addition to plain emoji icons
+- **Custom Model Aliases** - Map model id/display name to a short label via JSON env var
 - **Token Count Display** - Optional `tok:45.0K/12.0K` input/output token counts
 - **Cost Burn Rate** - Optional per-minute cost rate `(0.05/m)`
 - **Output Style Display** - Shows active output style next to model name
@@ -123,6 +127,11 @@ The statusline will appear at the bottom of your Claude Code interface.
 | `STATUSLINE_SHOW_TOKENS` | boolean | `0` | Show input/output token counts |
 | `STATUSLINE_SHOW_BURNRATE` | boolean | `0` | Show cost burn rate per minute |
 | `STATUSLINE_LAYOUT` | string | `vim,time,model,dir,cost,lines,api` | Comma-separated segment order |
+| `STATUSLINE_THEME` | string | `default` | Color palette: `default`, `gruvbox`, `nord`, `minimal` |
+| `STATUSLINE_ICON_MODE` | string | `plain` | Icon set: `plain` (emoji) or `nerd_font` (Nerd Font glyphs) |
+| `STATUSLINE_CTX_STYLE` | string | `bar` | Context window style: `bar` (visual) or `text` (legacy `ctx:42%`) |
+| `STATUSLINE_GIT_DETAIL` | string | `full` | Git indicator: `full` (count+ahead/behind), `simple` (dot only), `off` |
+| `STATUSLINE_MODEL_ALIASES` | JSON | `{}` | Model id/name → display alias, e.g. `{"claude-opus-4-6":"O4.6"}` |
 | `NO_COLOR` | any | - | Disable color output (standard) |
 
 ### Layout System
@@ -153,6 +162,33 @@ Header segments (`vim`, `time`, `model`, `dir`) are joined with spaces. All othe
 | 🟢 Green | < 50% | Plenty of context remaining |
 | 🟡 Yellow | 50% - 75% | Context getting used up |
 | 🔴 Red | ≥ 75% | Context nearly full |
+
+The default visual bar `[████░░░░░░] 42% 57k/200k` uses three glyphs per cell:
+`█` (filled, ≥80% of cell), `▄` (half, ≥30% of cell), `░` (empty). Set
+`STATUSLINE_CTX_STYLE=text` to fall back to the legacy `ctx:42%` format.
+
+#### Themes
+
+Switch with `STATUSLINE_THEME=<name>`:
+
+| Theme | Style |
+|-------|-------|
+| `default` | Eye-friendly muted palette (current) |
+| `gruvbox` | Warm retro |
+| `nord` | Cool arctic |
+| `minimal` | Mostly grayscale, only red for alerts |
+
+`NO_COLOR=1` always wins and disables all colors.
+
+#### Git Detail Modes
+
+`STATUSLINE_GIT_DETAIL`:
+
+| Mode | Output |
+|------|--------|
+| `full` (default) | `main●3↑2↓1` — file count, commits ahead, commits behind |
+| `simple` | `main●` — single dirty dot only |
+| `off` | `main` — no indicators |
 
 #### Cumulative API Time Colors
 
