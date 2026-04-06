@@ -100,17 +100,25 @@ DEFAULT_THEME = 'default'
 
 # ===================== Icons =====================
 ICONS: Dict[str, Dict[str, str]] = {
+    # plain mode: ASCII for git indicators (●/↑/↓ are Unicode East Asian
+    # Ambiguous width — CJK fonts render them as 2 cells while terminals
+    # advance only 1, causing the digit suffix to overdraw the glyph).
+    # Emoji (⏰📝⚡) are fullwidth and handled correctly by terminals.
     'plain': {
-        'time':  '⏰',
-        'lines': '📝',
-        'api':   '⚡',
-        'dirty': '●',
+        'time':   '⏰',
+        'lines':  '📝',
+        'api':    '⚡',
+        'dirty':  '*',
+        'ahead':  '+',
+        'behind': '-',
     },
     'nerd_font': {
-        'time':  '\uf017',
-        'lines': '\uf044',
-        'api':   '\uf0e7',
-        'dirty': '\uf444',
+        'time':   '\uf017',
+        'lines':  '\uf044',
+        'api':    '\uf0e7',
+        'dirty':  '\uf444',
+        'ahead':  '↑',
+        'behind': '↓',
     },
 }
 DEFAULT_ICON_MODE = 'plain'
@@ -722,23 +730,23 @@ def _build_dir_segment(ctx: ClaudeContext, git_status: GitStatus, config: Config
     if detail == GIT_DETAIL_OFF:
         return segment
 
+    icons = config.icons
     if detail == GIT_DETAIL_SIMPLE:
         if git_status.is_dirty:
-            segment += f"{Colors.RED}●{Colors.RESET}"
+            segment += f"{Colors.RED}{icons['dirty']}{Colors.RESET}"
         return segment
 
-    # GIT_DETAIL_FULL
-    # Dirty count (worktree state) glues to branch; upstream sync indicators
-    # get a leading space so multi-digit counts stay readable: 'main●12 ↑99↓42'.
+    # GIT_DETAIL_FULL: dirty (worktree) glues to branch; upstream sync
+    # indicators get a leading space so multi-digit counts stay readable.
     if git_status.dirty_count > 0:
-        segment += f"{Colors.RED}●{git_status.dirty_count}{Colors.RESET}"
+        segment += f"{Colors.RED}{icons['dirty']}{git_status.dirty_count}{Colors.RESET}"
     upstream_parts = []
     if git_status.ahead > 0:
-        upstream_parts.append(f"{Colors.CYAN}↑{git_status.ahead}{Colors.RESET}")
+        upstream_parts.append(f"{Colors.CYAN}{icons['ahead']}{git_status.ahead}{Colors.RESET}")
     if git_status.behind > 0:
-        upstream_parts.append(f"{Colors.YELLOW}↓{git_status.behind}{Colors.RESET}")
+        upstream_parts.append(f"{Colors.YELLOW}{icons['behind']}{git_status.behind}{Colors.RESET}")
     if upstream_parts:
-        segment += ' ' + ''.join(upstream_parts)
+        segment += ' ' + ' '.join(upstream_parts)
     return segment
 
 

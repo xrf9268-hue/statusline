@@ -721,7 +721,16 @@ class TestGitDetail(unittest.TestCase):
             config = statusline.Config()
         gs = statusline.GitStatus(dirty_count=3, ahead=2, behind=1)
         result = statusline._build_dir_segment(self._make_ctx(), gs, config)
-        self.assertIn('●3', result)
+        self.assertIn('*3', result)
+        self.assertIn('+2', result)
+        self.assertIn('-1', result)
+
+    def test_full_mode_nerd_font_uses_unicode(self):
+        with patch.dict(os.environ, {'STATUSLINE_GIT_DETAIL': 'full',
+                                     'STATUSLINE_ICON_MODE': 'nerd_font'}):
+            config = statusline.Config()
+        gs = statusline.GitStatus(dirty_count=3, ahead=2, behind=1)
+        result = statusline._build_dir_segment(self._make_ctx(), gs, config)
         self.assertIn('↑2', result)
         self.assertIn('↓1', result)
 
@@ -730,26 +739,26 @@ class TestGitDetail(unittest.TestCase):
             config = statusline.Config()
         gs = statusline.GitStatus(dirty_count=3, ahead=2, behind=1)
         result = statusline._build_dir_segment(self._make_ctx(), gs, config)
-        self.assertIn('●', result)
-        self.assertNotIn('●3', result)
-        self.assertNotIn('↑', result)
+        self.assertIn('*', result)
+        self.assertNotIn('*3', result)
+        self.assertNotIn('+', result)
 
     def test_off_mode_hides_all(self):
         with patch.dict(os.environ, {'STATUSLINE_GIT_DETAIL': 'off'}):
             config = statusline.Config()
         gs = statusline.GitStatus(dirty_count=3, ahead=2, behind=1)
         result = statusline._build_dir_segment(self._make_ctx(), gs, config)
-        self.assertNotIn('●', result)
-        self.assertNotIn('↑', result)
+        self.assertNotIn('*', result)
+        self.assertNotIn('+', result)
 
     def test_clean_repo_no_indicators(self):
         with patch.dict(os.environ, {'STATUSLINE_GIT_DETAIL': 'full'}):
             config = statusline.Config()
         gs = statusline.GitStatus(dirty_count=0, ahead=0, behind=0)
         result = statusline._build_dir_segment(self._make_ctx(), gs, config)
-        self.assertNotIn('●', result)
-        self.assertNotIn('↑', result)
-        self.assertNotIn('↓', result)
+        self.assertNotIn('*', result)
+        self.assertNotIn('+', result)
+        self.assertNotIn('-', result)
 
 
 class TestCrossPlatformLocking(unittest.TestCase):
