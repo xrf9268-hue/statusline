@@ -773,6 +773,62 @@ class TestGitDetail(unittest.TestCase):
         self.assertNotIn('-', result)
 
 
+class TestBranchTruncation(unittest.TestCase):
+    """Test branch name truncation (STATUSLINE_BRANCH_MAX_LEN)."""
+
+    BASE_ENV = {'STATUSLINE_GIT_DETAIL': 'off', 'NO_COLOR': '1'}
+
+    def _render(self, branch, env=None, detached=False):
+        merged = {**self.BASE_ENV, **(env or {})}
+        with patch.dict(os.environ, merged):
+            config = statusline.Config()
+        ctx = statusline.ClaudeContext(dir='proj', branch=branch, detached=detached)
+        return statusline._build_dir_segment(ctx, statusline.GitStatus(), config)
+
+    def test_truncate_pure_helper(self):
+        cases = [
+            ('within limit',  ('main',     25, '..'), 'main'),
+            ('exact length',  ('a' * 25,   25, '..'), 'a' * 25),
+            ('overflow',      ('a' * 30,   10, '..'), 'a' * 10 + '..'),
+            ('disabled (0)',  ('a' * 100,   0, '..'), 'a' * 100),
+            ('disabled (-1)', ('a' * 100,  -1, '..'), 'a' * 100),
+        ]
+        for label, args, expected in cases:
+            with self.subTest(label):
+                self.assertEqual(statusline._truncate_branch(*args), expected)
+
+    def test_default_truncates_long_branch_in_segment(self):
+        result = self._render('visual-context-bar-and-git-detail')  # 32 chars
+        self.assertIn('visual-context-bar-and-gi..', result)
+        self.assertNotIn('git-detail', result)
+
+    def test_disable_via_env(self):
+        result = self._render(
+            'visual-context-bar-and-git-detail',
+            env={'STATUSLINE_BRANCH_MAX_LEN': '0'},
+        )
+        self.assertIn('visual-context-bar-and-git-detail', result)
+
+    def test_invalid_env_falls_back_to_default(self):
+        with patch.dict(os.environ, {'STATUSLINE_BRANCH_MAX_LEN': 'not-an-int'}):
+            config = statusline.Config()
+        self.assertEqual(config.branch_max_len, statusline.DEFAULT_BRANCH_MAX_LEN)
+
+    def test_nerd_font_uses_unicode_ellipsis(self):
+        result = self._render('abcdefghij', env={
+            'STATUSLINE_ICON_MODE': 'nerd_font',
+            'STATUSLINE_BRANCH_MAX_LEN': '5',
+        })
+        self.assertIn('abcde…', result)
+
+    def test_detached_head_truncated_uniformly(self):
+        # Detached HEAD must flow through the same truncation path as branches
+        # so abstraction boundaries don't leak across the two display modes.
+        result = self._render('abc1234', env={'STATUSLINE_BRANCH_MAX_LEN': '4'},
+                              detached=True)
+        self.assertIn('@abc1..', result)
+
+
 class TestCrossPlatformLocking(unittest.TestCase):
     """Test cross-platform file locking functions"""
 
